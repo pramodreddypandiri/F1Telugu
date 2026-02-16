@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import struct
 import subprocess
 import tempfile
 import os
@@ -7,88 +8,118 @@ import os
 logger = logging.getLogger(__name__)
 
 
-class YouTubeAudioCapture:
-    """Captures audio from a YouTube live stream using yt-dlp."""
+def wrap_pcm_as_wav(pcm_data: bytes, sample_rate: int = 16000, channels: int = 1, bits_per_sample: int = 16) -> bytes:
+    """Wrap raw PCM data with a valid WAV header."""
+    data_size = len(pcm_data)
+    byte_rate = sample_rate * channels * bits_per_sample // 8
+    block_align = channels * bits_per_sample // 8
 
-    def __init__(self, youtube_url: str, chunk_duration: int = 5):
+    header = struct.pack(
+        "<4sI4s4sIHHIIHH4sI",
+        b"RIFF",
+        36 + data_size,       # file size - 8
+        b"WAVE",
+        b"fmt ",
+        16,                   # fmt chunk size
+        1,                    # PCM format
+        channels,
+        sample_rate,
+        byte_rate,
+        block_align,
+        bits_per_sample,
+        b"data",
+        data_size,
+    )
+    return header + pcm_data
+
+
+class YouTubeAudioCapture:
+    """Captures audio from a YouTube live stream using yt-dlp + ffmpeg.
+
+    Uses a shell pipe: yt-dlp → ffmpeg → raw PCM → WAV-wrapped chunks
+    Works with both live streams and regular videos.
+    """
+
+    def __init__(self, youtube_url: str, chunk_duration: int = 10):
         self.youtube_url = youtube_url
         self.chunk_duration = chunk_duration
-        self.process: subprocess.Popen | None = None
+        self._process = None
         self._running = False
 
-    async def start_capture(self):
-        """Start capturing audio stream from YouTube."""
-        logger.info(f"Starting audio capture from: {self.youtube_url}")
+    async def get_audio_chunks(self):
+        """Stream audio from YouTube and yield WAV-wrapped PCM chunks."""
+        self._running = True
 
-        command = [
-            "yt-dlp",
-            "-f", "bestaudio",
-            "-o", "-",
-            "--no-playlist",
-            "--quiet",
-            self.youtube_url,
-        ]
+        yt_dlp_bin = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "venv", "bin", "yt-dlp",
+        )
+        if not os.path.exists(yt_dlp_bin):
+            yt_dlp_bin = "yt-dlp"
 
-        self.process = await asyncio.create_subprocess_exec(
-            *command,
+        # Shell pipe: yt-dlp streams audio → ffmpeg converts to raw PCM
+        shell_cmd = (
+            f'{yt_dlp_bin} -f bestaudio -o - --no-playlist --quiet '
+            f'"{self.youtube_url}" | '
+            f'ffmpeg -i pipe:0 -f s16le -acodec pcm_s16le -ar 16000 -ac 1 '
+            f'-loglevel error pipe:1'
+        )
+
+        logger.info(f"Starting YouTube audio capture: {self.youtube_url}")
+
+        self._process = await asyncio.create_subprocess_shell(
+            shell_cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        self._running = True
-        logger.info("Audio capture started successfully")
 
-    async def get_audio_chunks(self):
-        """Yield audio chunks from the live stream.
+        logger.info("Audio capture pipeline started (yt-dlp | ffmpeg → PCM)")
 
-        Each chunk is raw audio bytes of approximately `chunk_duration` seconds.
-        We accumulate bytes from stdout and yield fixed-size chunks.
-        """
-        if not self.process or not self.process.stdout:
-            raise RuntimeError("Audio capture not started. Call start_capture() first.")
-
-        # Approximate bytes per chunk (assuming ~128kbps audio)
-        bytes_per_second = 16000  # 128 kbps = 16 KB/s
-        chunk_size = bytes_per_second * self.chunk_duration
-
+        # 16000 samples/sec * 2 bytes/sample * chunk_duration
+        chunk_size = 16000 * 2 * self.chunk_duration
         buffer = bytearray()
 
         while self._running:
             try:
                 data = await asyncio.wait_for(
-                    self.process.stdout.read(4096),
-                    timeout=10.0,
+                    self._process.stdout.read(4096),
+                    timeout=30.0,
                 )
 
                 if not data:
-                    logger.warning("Audio stream ended")
+                    logger.info("Audio stream ended")
                     break
 
                 buffer.extend(data)
 
-                # Yield complete chunks
                 while len(buffer) >= chunk_size:
-                    chunk = bytes(buffer[:chunk_size])
+                    pcm_chunk = bytes(buffer[:chunk_size])
                     buffer = buffer[chunk_size:]
-                    yield chunk
+                    yield wrap_pcm_as_wav(pcm_chunk)
 
             except asyncio.TimeoutError:
-                logger.warning("Audio read timeout, stream may be stalled")
-                continue
+                logger.warning("Audio read timeout, stream may have ended")
+                break
             except Exception as e:
                 logger.error(f"Error reading audio stream: {e}")
                 break
 
-        # Yield remaining buffer if any
+        # Yield remaining buffer
         if buffer:
-            yield bytes(buffer)
+            yield wrap_pcm_as_wav(bytes(buffer))
+
+        await self.stop()
 
     async def stop(self):
         """Stop audio capture."""
         self._running = False
-        if self.process:
-            self.process.terminate()
-            await self.process.wait()
-            logger.info("Audio capture stopped")
+        if self._process and self._process.returncode is None:
+            self._process.terminate()
+            try:
+                await asyncio.wait_for(self._process.wait(), timeout=5)
+            except asyncio.TimeoutError:
+                self._process.kill()
+        logger.info("Audio capture stopped")
 
 
 class AudioFileCapture:
@@ -99,12 +130,15 @@ class AudioFileCapture:
         self.chunk_duration = chunk_duration
 
     async def get_audio_chunks(self):
-        """Yield audio chunks from a local file using ffmpeg."""
-        # Convert to raw PCM chunks using ffmpeg
+        """Yield audio chunks from a local file using ffmpeg.
+
+        Each chunk is wrapped with a WAV header so Deepgram can decode it.
+        """
+        # Output raw PCM (s16le) so we can wrap each chunk with a WAV header
         command = [
             "ffmpeg",
             "-i", self.file_path,
-            "-f", "wav",
+            "-f", "s16le",
             "-acodec", "pcm_s16le",
             "-ar", "16000",
             "-ac", "1",
@@ -129,11 +163,11 @@ class AudioFileCapture:
             buffer.extend(data)
 
             while len(buffer) >= chunk_size:
-                chunk = bytes(buffer[:chunk_size])
+                pcm_chunk = bytes(buffer[:chunk_size])
                 buffer = buffer[chunk_size:]
-                yield chunk
+                yield wrap_pcm_as_wav(pcm_chunk)
 
         if buffer:
-            yield bytes(buffer)
+            yield wrap_pcm_as_wav(bytes(buffer))
 
         await process.wait()

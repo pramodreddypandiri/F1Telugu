@@ -60,6 +60,9 @@ export function useWebSocket() {
     });
 
     socket.on("audio_chunk", (data: AudioChunk) => {
+      console.log(
+        `[WebSocket] audio_chunk received (${Math.round(data.audio.length / 1024)} KB)`
+      );
       setAudioChunks((prev) => [...prev, data.audio]);
       onAudioChunkRef.current?.(data.audio);
     });

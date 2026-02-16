@@ -78,11 +78,14 @@ async def disconnect(sid):
 
 async def broadcast_audio_chunk(audio_data: bytes):
     """Broadcast Telugu audio to all connected clients."""
+    b64 = base64.b64encode(audio_data).decode("utf-8")
+    logger.info(
+        f"Broadcasting audio_chunk to {len(active_connections)} clients "
+        f"({len(audio_data)} bytes, {len(b64)} b64 chars)"
+    )
     await sio.emit(
         "audio_chunk",
-        {
-            "audio": base64.b64encode(audio_data).decode("utf-8"),
-        },
+        {"audio": b64},
     )
 
 
@@ -126,15 +129,44 @@ async def test_translate(request: TestCommentaryRequest):
     }
 
 
-@app.post("/api/start-live")
-async def start_live_pipeline(youtube_url: str = ""):
-    """Start the live commentary pipeline from a YouTube stream."""
-    url = youtube_url or settings.YOUTUBE_STREAM_URL
-    if not url:
-        return {"error": "No YouTube URL provided"}
+@app.post("/api/test/broadcast")
+async def test_broadcast(request: TestCommentaryRequest):
+    """Test endpoint: translate + TTS + broadcast via WebSocket.
 
-    asyncio.create_task(pipeline.run_live(url))
-    return {"status": "started", "youtube_url": url}
+    Use this to test the full frontend audio playback without YouTube.
+    """
+    result = await pipeline.test_translation_only(request.english_text)
+    await broadcast_audio_chunk(result["audio"])
+    return {
+        "english": result["english"],
+        "telugu": result["telugu"],
+        "audio_size_bytes": result["audio_size_bytes"],
+        "broadcast": True,
+        "connected_clients": len(active_connections),
+    }
+
+
+class StartStreamRequest(BaseModel):
+    youtube_url: str
+
+
+@app.post("/api/start")
+async def start_pipeline(request: StartStreamRequest):
+    """Start the streaming commentary pipeline from a YouTube URL.
+
+    Works with both live streams and regular videos.
+    Streams continuously until the video ends or /api/stop is called.
+    Audio chunks are broadcast to all connected frontend clients via WebSocket.
+    """
+    if pipeline._running:
+        return {"error": "Pipeline already running. Call /api/stop first."}
+
+    asyncio.create_task(pipeline.run_live(request.youtube_url))
+    return {
+        "status": "started",
+        "youtube_url": request.youtube_url,
+        "message": "Streaming Telugu commentary to all connected clients",
+    }
 
 
 @app.post("/api/stop")

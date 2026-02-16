@@ -2,10 +2,9 @@ import asyncio
 import logging
 
 from services.audio_capture import YouTubeAudioCapture, AudioFileCapture
-from services.speech_to_text import SpeechToTextService, BatchSpeechToText
+from services.speech_to_text import BatchSpeechToText
 from services.commentary_agent import TeluguCommentaryAgent
 from services.text_to_speech import TeluguTTSService
-from config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -13,23 +12,25 @@ logger = logging.getLogger(__name__)
 class CommentaryPipeline:
     """Orchestrates the full commentary pipeline:
     Audio → STT → Translation → TTS → Broadcast
+
+    Works as a streaming pipeline - no need to know video length.
     """
 
     def __init__(self, broadcast_audio_fn, broadcast_leaderboard_fn=None):
         self.broadcast_audio = broadcast_audio_fn
         self.broadcast_leaderboard = broadcast_leaderboard_fn
 
-        # Lazy-initialized to avoid requiring credentials at import time
         self._stt_service = None
         self._commentary_agent = None
         self._tts_service = None
 
         self._running = False
+        self._capture = None
 
     @property
     def stt_service(self):
         if self._stt_service is None:
-            self._stt_service = SpeechToTextService()
+            self._stt_service = BatchSpeechToText()
         return self._stt_service
 
     @property
@@ -45,22 +46,14 @@ class CommentaryPipeline:
         return self._tts_service
 
     async def process_sentence(self, english_text: str):
-        """Process a single English sentence through the pipeline.
-
-        English text → Telugu text → Telugu audio → Broadcast
-        """
+        """English text → Telugu text → Telugu audio → Broadcast"""
         try:
-            logger.info(f"Processing: {english_text[:60]}...")
+            logger.info(f"Processing: {english_text[:80]}...")
 
-            # Step 1: Translate to Telugu
             telugu_text = await self.commentary_agent.generate_telugu_commentary(
                 english_text
             )
-
-            # Step 2: Convert to speech
             audio_data = await self.tts_service.synthesize_speech(telugu_text)
-
-            # Step 3: Broadcast to connected clients
             await self.broadcast_audio(audio_data)
 
             logger.info("Pipeline cycle complete")
@@ -69,23 +62,42 @@ class CommentaryPipeline:
             logger.error(f"Pipeline error: {e}")
 
     async def run_live(self, youtube_url: str):
-        """Run the full live pipeline from a YouTube stream."""
+        """Run the streaming pipeline from a YouTube live stream or video.
+
+        Continuously: capture audio → transcribe → translate → TTS → broadcast
+        Runs until the stream ends or stop() is called.
+        """
         self._running = True
         logger.info(f"Starting live pipeline for: {youtube_url}")
 
-        capture = YouTubeAudioCapture(youtube_url)
-        await capture.start_capture()
+        self._capture = YouTubeAudioCapture(youtube_url, chunk_duration=10)
+        chunk_num = 0
 
         try:
-            await self.stt_service.transcribe_stream(
-                capture.get_audio_chunks(),
-                on_sentence=self.process_sentence,
-            )
+            async for chunk in self._capture.get_audio_chunks():
+                if not self._running:
+                    logger.info("Pipeline stopped by user")
+                    break
+
+                chunk_num += 1
+                logger.info(f"Chunk {chunk_num} ({len(chunk)} bytes)")
+
+                english_text = await self.stt_service.transcribe_audio(chunk)
+                if not english_text.strip():
+                    logger.info(f"Chunk {chunk_num}: no speech detected, skipping")
+                    continue
+
+                logger.info(f"Chunk {chunk_num} EN: {english_text[:80]}...")
+                await self.process_sentence(english_text)
+
+            logger.info(f"Pipeline finished after {chunk_num} chunks")
+
         except Exception as e:
             logger.error(f"Live pipeline error: {e}")
         finally:
-            await capture.stop()
             self._running = False
+            if self._capture:
+                await self._capture.stop()
 
     async def run_from_file(self, file_path: str):
         """Run the pipeline from a local audio file (for testing)."""
@@ -93,15 +105,13 @@ class CommentaryPipeline:
         logger.info(f"Starting file pipeline for: {file_path}")
 
         capture = AudioFileCapture(file_path)
-        batch_stt = BatchSpeechToText()
 
         try:
             async for chunk in capture.get_audio_chunks():
                 if not self._running:
                     break
 
-                # Transcribe chunk
-                english_text = await batch_stt.transcribe_audio(chunk)
+                english_text = await self.stt_service.transcribe_audio(chunk)
                 if english_text.strip():
                     await self.process_sentence(english_text)
 
@@ -111,11 +121,7 @@ class CommentaryPipeline:
             self._running = False
 
     async def test_translation_only(self, english_text: str) -> dict:
-        """Test the translation + TTS pipeline with manual text input.
-
-        Useful for testing without audio capture or STT.
-        Returns dict with telugu_text and audio_size.
-        """
+        """Test translation + TTS without audio capture or STT."""
         telugu_text = await self.commentary_agent.generate_telugu_commentary(
             english_text
         )
@@ -131,4 +137,6 @@ class CommentaryPipeline:
     def stop(self):
         """Stop the pipeline."""
         self._running = False
-        logger.info("Pipeline stopped")
+        if self._capture:
+            asyncio.create_task(self._capture.stop())
+        logger.info("Pipeline stop requested")

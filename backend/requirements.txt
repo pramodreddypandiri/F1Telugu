@@ -16,7 +16,7 @@ edge-tts==7.2.7
 pydub==0.25.1
 
 # YouTube audio capture
-yt-dlp==2024.12.23
+yt-dlp>=2026.2.4
 
 # Caching
 redis==5.2.1

@@ -12,7 +12,7 @@ export default function AudioPlayer({
   isConnected,
   setOnAudioChunk,
 }: AudioPlayerProps) {
-  const { isPlaying, volume, setVolume, handleAudioChunk, initAudioContext } =
+  const { isPlaying, isEnabled, volume, setVolume, handleAudioChunk, enable } =
     useAudioPlayer();
 
   useEffect(() => {
@@ -54,10 +54,18 @@ export default function AudioPlayer({
       {/* Controls */}
       <div className="flex items-center gap-3">
         <button
-          onClick={initAudioContext}
-          className="bg-[#e10600] hover:bg-[#b80500] text-white px-4 py-2 rounded-lg text-sm font-semibold transition-colors"
+          onClick={enable}
+          className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${
+            isEnabled
+              ? "bg-green-600 hover:bg-green-700 text-white"
+              : "bg-[#e10600] hover:bg-[#b80500] text-white"
+          }`}
         >
-          {isPlaying ? "▶ ప్లే అవుతోంది" : "▶ ప్లే"}
+          {isPlaying
+            ? "🔊 ప్లే అవుతోంది"
+            : isEnabled
+              ? "✓ రెడీ"
+              : "▶ ప్లే"}
         </button>
 
         {/* Volume */}
@@ -80,6 +88,13 @@ export default function AudioPlayer({
           />
         </div>
       </div>
+
+      {/* Status hint */}
+      {!isEnabled && isConnected && (
+        <p className="text-xs text-gray-500 mt-3 text-center">
+          ఆడియో వినడానికి &quot;ప్లే&quot; నొక్కండి
+        </p>
+      )}
     </div>
   );
 }

@@ -88,10 +88,10 @@ class BatchSpeechToText:
         """Transcribe an audio chunk to text."""
         try:
             response = self.client.listen.v1.media.transcribe_file(
-                file=audio_data,
+                request=audio_data,
                 model="nova-2",
                 language="en",
-                punctuate="true",
+                punctuate=True,
             )
 
             transcript = response.results.channels[0].alternatives[0].transcript
