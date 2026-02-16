@@ -1,0 +1,29 @@
+# Web framework
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+
+# WebSocket
+python-socketio==5.12.1
+
+# AI & ML
+groq==1.0.0
+deepgram-sdk==5.3.2
+
+# Text-to-Speech (free, no API key needed)
+edge-tts==7.2.7
+
+# Audio processing
+pydub==0.25.1
+
+# YouTube audio capture
+yt-dlp==2024.12.23
+
+# Caching
+redis==5.2.1
+
+# Environment variables
+python-dotenv==1.0.1
+
+# Async HTTP
+aiohttp==3.11.11
+httpx==0.28.1
