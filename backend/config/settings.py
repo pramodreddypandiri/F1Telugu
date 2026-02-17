@@ -34,5 +34,8 @@ class Settings:
     LLM_MAX_TOKENS: int = 500
     LLM_TEMPERATURE: float = 0.7
 
+    # Dataset collection
+    DATASET_COLLECTION: bool = True  # Enable/disable dataset logging
+
 
 settings = Settings()

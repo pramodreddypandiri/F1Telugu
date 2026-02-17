@@ -148,6 +148,7 @@ async def test_broadcast(request: TestCommentaryRequest):
 
 class StartStreamRequest(BaseModel):
     youtube_url: str
+    race_name: str | None = None  # e.g. "2025-bahrain-gp"
 
 
 @app.post("/api/start")
@@ -158,22 +159,40 @@ async def start_pipeline(request: StartStreamRequest):
     Streams continuously until the video ends or /api/stop is called.
     Audio chunks are broadcast to all connected frontend clients via WebSocket.
     """
+    global pipeline
     if pipeline._running:
         return {"error": "Pipeline already running. Call /api/stop first."}
+
+    # Create a fresh pipeline with the race name for dataset tagging
+    pipeline = CommentaryPipeline(
+        broadcast_audio_fn=broadcast_audio_chunk,
+        broadcast_leaderboard_fn=broadcast_leaderboard,
+        race_name=request.race_name,
+    )
 
     asyncio.create_task(pipeline.run_live(request.youtube_url))
     return {
         "status": "started",
         "youtube_url": request.youtube_url,
+        "race_name": pipeline.dataset_collector.race_name,
         "message": "Streaming Telugu commentary to all connected clients",
     }
 
 
 @app.post("/api/stop")
 async def stop_pipeline():
-    """Stop the running pipeline."""
+    """Stop the running pipeline and finalize dataset collection."""
+    stats = pipeline.dataset_collector.get_stats() if pipeline._dataset_collector else {}
     pipeline.stop()
-    return {"status": "stopped"}
+    return {"status": "stopped", "dataset_stats": stats}
+
+
+@app.get("/api/dataset/stats")
+async def dataset_stats():
+    """Get current dataset collection stats."""
+    if pipeline._dataset_collector:
+        return pipeline.dataset_collector.get_stats()
+    return {"message": "No active dataset collection"}
 
 
 if __name__ == "__main__":

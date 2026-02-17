@@ -3,7 +3,11 @@
     "allow": [
       "Bash(source:*)",
       "Bash(pip install:*)",
-      "Bash(curl:*)"
+      "Bash(curl:*)",
+      "Bash(python3:*)",
+      "Bash(python main.py:*)",
+      "Bash(while IFS= read -r line)",
+      "Bash(do echo \"$line\")"
     ]
   }
 }

@@ -3,7 +3,7 @@ import logging
 
 from services.audio_capture import YouTubeAudioCapture, AudioFileCapture
 from services.speech_to_text import BatchSpeechToText
-from services.commentary_agent import TeluguCommentaryAgent
+from services.dataset_collector import DatasetCollector
 from services.text_to_speech import TeluguTTSService
 
 logger = logging.getLogger(__name__)
@@ -16,12 +16,13 @@ class CommentaryPipeline:
     Works as a streaming pipeline - no need to know video length.
     """
 
-    def __init__(self, broadcast_audio_fn, broadcast_leaderboard_fn=None):
+    def __init__(self, broadcast_audio_fn, broadcast_leaderboard_fn=None, race_name: str = None):
         self.broadcast_audio = broadcast_audio_fn
         self.broadcast_leaderboard = broadcast_leaderboard_fn
+        self.race_name = race_name
 
         self._stt_service = None
-        self._commentary_agent = None
+        self._dataset_collector = None
         self._tts_service = None
 
         self._running = False
@@ -34,10 +35,10 @@ class CommentaryPipeline:
         return self._stt_service
 
     @property
-    def commentary_agent(self):
-        if self._commentary_agent is None:
-            self._commentary_agent = TeluguCommentaryAgent()
-        return self._commentary_agent
+    def dataset_collector(self):
+        if self._dataset_collector is None:
+            self._dataset_collector = DatasetCollector(race_name=self.race_name)
+        return self._dataset_collector
 
     @property
     def tts_service(self):
@@ -46,13 +47,18 @@ class CommentaryPipeline:
         return self._tts_service
 
     async def process_sentence(self, english_text: str):
-        """English text → Telugu text → Telugu audio → Broadcast"""
+        """English text → classify → Telugu text → Telugu audio → Broadcast"""
         try:
             logger.info(f"Processing: {english_text[:80]}...")
 
-            telugu_text = await self.commentary_agent.generate_telugu_commentary(
+            telugu_text = await self.dataset_collector.generate_telugu_commentary(
                 english_text
             )
+
+            if not telugu_text:
+                logger.info("Filler detected, skipping TTS/broadcast")
+                return
+
             audio_data = await self.tts_service.synthesize_speech(telugu_text)
             await self.broadcast_audio(audio_data)
 
@@ -122,21 +128,26 @@ class CommentaryPipeline:
 
     async def test_translation_only(self, english_text: str) -> dict:
         """Test translation + TTS without audio capture or STT."""
-        telugu_text = await self.commentary_agent.generate_telugu_commentary(
+        telugu_text = await self.dataset_collector.generate_telugu_commentary(
             english_text
         )
-        audio_data = await self.tts_service.synthesize_speech(telugu_text)
+        audio_data = b""
+        if telugu_text:
+            audio_data = await self.tts_service.synthesize_speech(telugu_text)
 
         return {
             "english": english_text,
             "telugu": telugu_text,
+            "event_stats": self.dataset_collector.get_stats(),
             "audio_size_bytes": len(audio_data),
             "audio": audio_data,
         }
 
     def stop(self):
-        """Stop the pipeline."""
+        """Stop the pipeline and finalize dataset collection."""
         self._running = False
         if self._capture:
             asyncio.create_task(self._capture.stop())
+        if self._dataset_collector:
+            self._dataset_collector.finish()
         logger.info("Pipeline stop requested")
