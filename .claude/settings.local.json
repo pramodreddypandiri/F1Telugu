@@ -7,7 +7,8 @@
       "Bash(python3:*)",
       "Bash(python main.py:*)",
       "Bash(while IFS= read -r line)",
-      "Bash(do echo \"$line\")"
+      "Bash(do echo \"$line\")",
+      "Bash(wc:*)"
     ]
   }
 }

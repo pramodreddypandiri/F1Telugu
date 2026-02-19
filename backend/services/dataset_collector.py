@@ -1,9 +1,13 @@
 """
 Dataset Collection Service
 ===========================
-Plugs into the pipeline between Deepgram (STT) and Edge TTS.
-Classifies commentary by event type, generates Telugu translation, and logs
-English-Telugu pairs to a JSONL file for future model fine-tuning.
+Plugs into the pipeline between Deepgram (STT) and Sarvam Bulbul TTS.
+Classifies commentary by event type, generates Telugu translation via Sarvam-m,
+and logs English-Telugu pairs to a JSONL file for future model fine-tuning.
+
+LLM roles:
+  - Event classification  → Groq llama-3.1-8b-instant (fast English task)
+  - Telugu commentary     → Sarvam-m (purpose-built for Indian languages)
 """
 
 import json
@@ -11,6 +15,7 @@ import logging
 from datetime import datetime
 from pathlib import Path
 
+import httpx
 from groq import Groq
 
 from config import settings
@@ -19,6 +24,8 @@ logger = logging.getLogger(__name__)
 
 DATASET_DIR = Path(__file__).resolve().parent.parent / "datasets"
 DATASET_DIR.mkdir(exist_ok=True)
+
+SARVAM_CHAT_URL = "https://api.sarvam.ai/v1/chat/completions"
 
 # ── Classification prompt (runs on a small fast model) ──────────────────────
 
@@ -54,7 +61,7 @@ def _classify_event(client: Groq, english_text: str) -> str:
     """Classify a commentary line into an event type using a small fast model."""
     try:
         response = client.chat.completions.create(
-            model="llama-3.1-8b-instant",
+            model=settings.CLASSIFY_MODEL,
             messages=[
                 {"role": "system", "content": CLASSIFY_PROMPT},
                 {"role": "user", "content": english_text},
@@ -71,34 +78,56 @@ def _classify_event(client: Groq, english_text: str) -> str:
         return "info"
 
 
-def _generate_telugu(client: Groq, english_text: str, event_type: str, context: str = "") -> str:
-    """Generate natural Telugu commentary with energy matching the event type."""
+async def _generate_telugu_sarvam(english_text: str, event_type: str, context: str = "") -> str:
+    """Generate natural Telugu commentary via Sarvam-m.
+
+    Sarvam-m is purpose-built for Indian languages — produces more natural,
+    culturally appropriate Telugu output vs generic multilingual models.
+    """
     user_message = f"[{event_type.upper()}] {english_text}"
     if context:
         user_message += f"\nRace context: {context}"
 
+    payload = {
+        "model": settings.LLM_MODEL,
+        "messages": [
+            {"role": "system", "content": COMMENTARY_PROMPT},
+            {"role": "user", "content": user_message},
+        ],
+        "max_tokens": settings.LLM_MAX_TOKENS,
+        "temperature": settings.LLM_TEMPERATURE,
+    }
+
+    headers = {
+        "api-subscription-key": settings.SARVAM_API_KEY,
+        "Content-Type": "application/json",
+    }
+
     try:
-        response = client.chat.completions.create(
-            model=settings.LLM_MODEL,
-            messages=[
-                {"role": "system", "content": COMMENTARY_PROMPT},
-                {"role": "user", "content": user_message},
-            ],
-            max_tokens=settings.LLM_MAX_TOKENS,
-            temperature=settings.LLM_TEMPERATURE,
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.post(SARVAM_CHAT_URL, json=payload, headers=headers)
+            response.raise_for_status()
+        return response.json()["choices"][0]["message"]["content"].strip()
+    except httpx.HTTPStatusError as e:
+        logger.error(
+            f"Sarvam-m HTTP error {e.response.status_code}: {e.response.text}"
         )
-        return response.choices[0].message.content.strip()
+        return ""
     except Exception as e:
-        logger.error(f"Telugu generation failed: {e}")
+        logger.error(f"Sarvam-m Telugu generation failed: {e}")
         return ""
 
 
 class DatasetCollector:
     """Drop-in replacement for TeluguCommentaryAgent that also logs
-    every English→Telugu pair to a JSONL dataset file."""
+    every English→Telugu pair to a JSONL dataset file.
+
+    - Classification: Groq llama-3.1-8b-instant (fast, accurate in English)
+    - Generation:     Sarvam-m (best-in-class for Telugu output quality)
+    """
 
     def __init__(self, race_name: str | None = None):
-        self.client = Groq(api_key=settings.GROQ_API_KEY)
+        self.groq_client = Groq(api_key=settings.GROQ_API_KEY)
         self.race_name = race_name or datetime.now().strftime("%Y-%m-%d")
         self.dataset_file = DATASET_DIR / f"race_{self.race_name}.jsonl"
         self.stats = {"hype": 0, "tension": 0, "info": 0, "filler": 0, "total": 0}
@@ -107,11 +136,11 @@ class DatasetCollector:
         logger.info(f"DatasetCollector saving to: {self.dataset_file}")
 
     def set_context(self, context: str):
-        """Update race context (e.g. from leaderboard scraper)."""
+        """Update race context (e.g. from race context engine)."""
         self.current_context = context
 
     def update_race_context(self, leaderboard_data: dict):
-        """Update context from leaderboard data (same interface as TeluguCommentaryAgent)."""
+        """Update context from leaderboard data."""
         positions = leaderboard_data.get("positions", [])
         leader = positions[0]["driver_name"] if positions else "Unknown"
         top_3 = ", ".join(p["driver_name"] for p in positions[:3])
@@ -120,19 +149,19 @@ class DatasetCollector:
         self.current_context = f"Leader: {leader}, Top 3: {top_3}, Lap: {lap}/{total}"
 
     async def generate_telugu_commentary(self, english_text: str, context: str | None = None) -> str:
-        """Classify, translate, and log a commentary line.
+        """Classify, translate via Sarvam-m, and log a commentary line.
 
         Returns Telugu text, or empty string if the line was filler.
         """
         ctx = context or self.current_context
 
-        # 1. Classify
-        event_type = _classify_event(self.client, english_text)
+        # 1. Classify event type (Groq — fast English classification)
+        event_type = _classify_event(self.groq_client, english_text)
         self.stats[event_type] += 1
         self.stats["total"] += 1
 
-        # 2. Translate
-        telugu_text = _generate_telugu(self.client, english_text, event_type, ctx)
+        # 2. Generate Telugu commentary (Sarvam-m — best for Telugu)
+        telugu_text = await _generate_telugu_sarvam(english_text, event_type, ctx)
 
         # 3. Skip filler
         is_skipped = telugu_text == "##SKIP##" or event_type == "filler"

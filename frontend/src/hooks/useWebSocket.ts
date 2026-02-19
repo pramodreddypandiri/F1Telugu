@@ -5,6 +5,10 @@ import { io, Socket } from "socket.io-client";
 import { WS_URL } from "@/utils/constants";
 
 interface LeaderboardData {
+  session_key?: number;
+  session_name?: string;
+  circuit?: string;
+  country?: string;
   current_lap: number;
   total_laps: number;
   positions: DriverPosition[];
@@ -12,14 +16,23 @@ interface LeaderboardData {
 
 interface DriverPosition {
   position: number;
+  driver_number?: number;
   driver_name: string;
+  driver_code?: string;
   team: string;
+  team_colour?: string;
   gap: string;
   last_lap_time: string;
 }
 
 interface AudioChunk {
   audio: string; // base64
+}
+
+// English + Telugu commentary pair — displayed side by side on the frontend
+interface CommentaryText {
+  english: string;
+  telugu: string;
 }
 
 interface RaceEvent {
@@ -33,6 +46,7 @@ export function useWebSocket() {
 
   const [leaderboard, setLeaderboard] = useState<LeaderboardData | null>(null);
   const [audioChunks, setAudioChunks] = useState<string[]>([]);
+  const [commentaryFeed, setCommentaryFeed] = useState<CommentaryText[]>([]);
   const [raceEvents, setRaceEvents] = useState<RaceEvent[]>([]);
 
   const onAudioChunkRef = useRef<((audio: string) => void) | null>(null);
@@ -67,6 +81,11 @@ export function useWebSocket() {
       onAudioChunkRef.current?.(data.audio);
     });
 
+    // Telugu + English text pair — keep the last 50 entries for display
+    socket.on("commentary_text", (data: CommentaryText) => {
+      setCommentaryFeed((prev) => [...prev.slice(-49), data]);
+    });
+
     socket.on("race_event", (data: RaceEvent) => {
       setRaceEvents((prev) => [...prev.slice(-49), data]);
     });
@@ -90,9 +109,10 @@ export function useWebSocket() {
     isConnected,
     leaderboard,
     audioChunks,
+    commentaryFeed,
     raceEvents,
     setOnAudioChunk,
   };
 }
 
-export type { LeaderboardData, DriverPosition, RaceEvent };
+export type { LeaderboardData, DriverPosition, CommentaryText, RaceEvent };

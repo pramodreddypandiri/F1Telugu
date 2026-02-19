@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="Telugu F1 Live Commentary",
     description="Real-time Telugu commentary for Formula 1 races",
-    version="0.1.0",
+    version="2.2.0",
 )
 
 # CORS
@@ -90,8 +90,16 @@ async def broadcast_audio_chunk(audio_data: bytes):
 
 
 async def broadcast_leaderboard(leaderboard_data: dict):
-    """Broadcast leaderboard updates."""
+    """Broadcast leaderboard updates to all connected clients."""
     await sio.emit("leaderboard_update", leaderboard_data)
+
+
+async def broadcast_commentary_text(english: str, telugu: str):
+    """Broadcast the English + Telugu commentary text pair for side-by-side display."""
+    await sio.emit(
+        "commentary_text",
+        {"english": english, "telugu": telugu},
+    )
 
 
 async def broadcast_race_event(event_type: str, event_data: dict):
@@ -106,6 +114,7 @@ async def broadcast_race_event(event_type: str, event_data: dict):
 pipeline = CommentaryPipeline(
     broadcast_audio_fn=broadcast_audio_chunk,
     broadcast_leaderboard_fn=broadcast_leaderboard,
+    broadcast_commentary_fn=broadcast_commentary_text,
 )
 
 
@@ -136,6 +145,7 @@ async def test_broadcast(request: TestCommentaryRequest):
     Use this to test the full frontend audio playback without YouTube.
     """
     result = await pipeline.test_translation_only(request.english_text)
+    await broadcast_commentary_text(result["english"], result["telugu"])
     await broadcast_audio_chunk(result["audio"])
     return {
         "english": result["english"],
@@ -158,6 +168,7 @@ async def start_pipeline(request: StartStreamRequest):
     Works with both live streams and regular videos.
     Streams continuously until the video ends or /api/stop is called.
     Audio chunks are broadcast to all connected frontend clients via WebSocket.
+    Race context (OpenF1 leaderboard) refreshes automatically every 10 seconds.
     """
     global pipeline
     if pipeline._running:
@@ -167,6 +178,7 @@ async def start_pipeline(request: StartStreamRequest):
     pipeline = CommentaryPipeline(
         broadcast_audio_fn=broadcast_audio_chunk,
         broadcast_leaderboard_fn=broadcast_leaderboard,
+        broadcast_commentary_fn=broadcast_commentary_text,
         race_name=request.race_name,
     )
 
@@ -193,6 +205,17 @@ async def dataset_stats():
     if pipeline._dataset_collector:
         return pipeline.dataset_collector.get_stats()
     return {"message": "No active dataset collection"}
+
+
+@app.get("/api/race/context")
+async def race_context():
+    """Get current race context from OpenF1 (leaderboard + session info)."""
+    if pipeline._race_context:
+        return {
+            "leaderboard": pipeline.race_context.get_leaderboard(),
+            "context_string": pipeline.race_context.get_context_string(),
+        }
+    return {"message": "Race context engine not started — call /api/start first"}
 
 
 if __name__ == "__main__":

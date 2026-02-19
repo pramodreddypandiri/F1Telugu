@@ -1,49 +1,79 @@
-import io
+"""
+Telugu TTS — Sarvam Bulbul
+===========================
+Converts Telugu commentary text to speech using Sarvam's Bulbul TTS model.
+Bulbul is purpose-built for Indian languages and produces significantly more
+natural Telugu prosody, intonation, and rhythm than generic TTS engines.
+
+API reference: https://docs.sarvam.ai/api-reference-docs/text-to-speech
+"""
+
+import base64
 import logging
 
-import edge_tts
+import httpx
 
 from config import settings
 
 logger = logging.getLogger(__name__)
 
+SARVAM_TTS_URL = "https://api.sarvam.ai/text-to-speech"
+
 
 class TeluguTTSService:
-    """Converts Telugu text to natural speech using Microsoft Edge TTS (free)."""
+    """Converts Telugu text to speech using Sarvam Bulbul TTS."""
 
     def __init__(self):
-        self.voice = settings.TTS_VOICE_NAME
-        self.rate = settings.TTS_SPEAKING_RATE
+        self.api_key = settings.SARVAM_API_KEY
+        self.speaker = settings.TTS_SPEAKER
+        self.model = settings.TTS_MODEL
+        self.language = settings.TTS_LANGUAGE
+        self.pace = settings.TTS_PACE
 
     async def synthesize_speech(self, telugu_text: str) -> bytes:
-        """Convert Telugu text to MP3 audio bytes.
+        """Convert Telugu text to WAV audio bytes via Sarvam Bulbul.
 
         Args:
-            telugu_text: Telugu text to convert to speech.
+            telugu_text: Telugu text to synthesize.
 
         Returns:
-            MP3 audio bytes.
+            WAV audio bytes.
         """
-        # Convert speaking rate to Edge TTS format (e.g. 1.1 → "+10%")
-        rate_percent = int((self.rate - 1.0) * 100)
-        rate_str = f"+{rate_percent}%" if rate_percent >= 0 else f"{rate_percent}%"
+        payload = {
+            "inputs": [telugu_text],
+            "target_language_code": self.language,
+            "speaker": self.speaker,
+            "model": self.model,
+            "enable_preprocessing": True,
+            "pace": self.pace,
+            "pitch": 0,
+            "loudness": 1.5,
+        }
+
+        headers = {
+            "api-subscription-key": self.api_key,
+            "Content-Type": "application/json",
+        }
 
         try:
-            communicate = edge_tts.Communicate(
-                telugu_text,
-                voice=self.voice,
-                rate=rate_str,
+            async with httpx.AsyncClient(timeout=30) as client:
+                response = await client.post(
+                    SARVAM_TTS_URL, json=payload, headers=headers
+                )
+                response.raise_for_status()
+
+            data = response.json()
+            # Bulbul returns base64-encoded audio per input
+            audio_b64 = data["audios"][0]
+            audio_bytes = base64.b64decode(audio_b64)
+            logger.info(f"Bulbul TTS generated {len(audio_bytes)} bytes of audio")
+            return audio_bytes
+
+        except httpx.HTTPStatusError as e:
+            logger.error(
+                f"Sarvam TTS HTTP error {e.response.status_code}: {e.response.text}"
             )
-
-            audio_buffer = io.BytesIO()
-            async for chunk in communicate.stream():
-                if chunk["type"] == "audio":
-                    audio_buffer.write(chunk["data"])
-
-            audio_data = audio_buffer.getvalue()
-            logger.info(f"TTS generated {len(audio_data)} bytes of audio")
-            return audio_data
-
+            raise
         except Exception as e:
-            logger.error(f"TTS synthesis error: {e}")
+            logger.error(f"Sarvam TTS error: {e}")
             raise

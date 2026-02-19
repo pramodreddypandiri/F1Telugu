@@ -5,23 +5,26 @@ import RaceHeader from "@/components/RaceInfo/RaceHeader";
 import AudioPlayer from "@/components/AudioPlayer/AudioPlayer";
 import Leaderboard from "@/components/Leaderboard/Leaderboard";
 import RaceInfo from "@/components/RaceInfo/RaceInfo";
+import CommentaryFeed from "@/components/CommentaryFeed/CommentaryFeed";
 
 export default function Home() {
-  const { isConnected, leaderboard, setOnAudioChunk } = useWebSocket();
+  const { isConnected, leaderboard, commentaryFeed, setOnAudioChunk } =
+    useWebSocket();
 
   return (
-    <div className="min-h-screen p-6 max-w-7xl mx-auto">
+    <div className="min-h-screen p-4 md:p-6 max-w-7xl mx-auto">
       {/* Header */}
       <RaceHeader isConnected={isConnected} />
 
       {/* Main Content */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-6">
-        {/* Left - Leaderboard (2/3 width) */}
-        <div className="lg:col-span-2">
+        {/* Left — Leaderboard + Commentary Feed (2/3 width) */}
+        <div className="lg:col-span-2 space-y-6">
           <Leaderboard data={leaderboard} />
+          <CommentaryFeed feed={commentaryFeed} />
         </div>
 
-        {/* Right - Sidebar (1/3 width) */}
+        {/* Right — Sidebar (1/3 width) */}
         <div className="space-y-6">
           <AudioPlayer
             isConnected={isConnected}

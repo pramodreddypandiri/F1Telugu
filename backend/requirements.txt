@@ -5,12 +5,11 @@ uvicorn[standard]==0.34.0
 # WebSocket
 python-socketio==5.12.1
 
-# AI & ML
-groq==1.0.0
+# Speech-to-Text
 deepgram-sdk==5.3.2
 
-# Text-to-Speech (free, no API key needed)
-edge-tts==7.2.7
+# AI — event classification (fast English model via Groq)
+groq==1.0.0
 
 # Audio processing
 pydub==0.25.1
@@ -24,6 +23,6 @@ redis==5.2.1
 # Environment variables
 python-dotenv==1.0.1
 
-# Async HTTP
+# Async HTTP — used for Sarvam-m LLM, Sarvam Bulbul TTS, and OpenF1 API calls
 aiohttp==3.11.11
 httpx==0.28.1
