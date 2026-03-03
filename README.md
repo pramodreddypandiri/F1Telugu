@@ -282,3 +282,7 @@ Single pipeline architecture: one English stream → one Telugu audio stream →
 | **Total API per race** | **~$1–5 (est.)** |
 
 Full season estimate (24 races + practice/quali): ~$720–$1,560/year including hosting.
+
+
+[![Video Thumbnail](http://img.youtube.com)](https://youtu.be/Q0FV4B9cig8)
+
