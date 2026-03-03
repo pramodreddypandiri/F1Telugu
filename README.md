@@ -284,5 +284,6 @@ Single pipeline architecture: one English stream → one Telugu audio stream →
 Full season estimate (24 races + practice/quali): ~$720–$1,560/year including hosting.
 
 
-[![Video Thumbnail](http://img.youtube.com)](https://youtu.be/Q0FV4B9cig8)
+
+[![Watch the demo video](thumbnail_image.jpg)](https://youtu.be/Q0FV4B9cig8)
 
